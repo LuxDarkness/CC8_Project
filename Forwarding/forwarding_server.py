@@ -64,7 +64,69 @@ def setup_logger(name, log_file, clean_file=False, level=logging.DEBUG):
 
 
 async def parse_request(msg_lines, logger):
+    logger.info('Trying to parse a REQUEST from {}.'.format(logger.name))
+    if 'From:' not in msg_lines[0] or not msg_lines[0][5:].strip():
+        # Not correct FROM
+        logger.error('Incorrect REQUEST, bad FROM received from {}, received: {}.'.format(logger.name, msg_lines[0]))
+        return 400
+    if 'To:' not in msg_lines[1] or not msg_lines[1][3:].strip():
+        # Not correct TO
+        logger.error('Incorrect REQUEST, bad TO received from {}, received: {}.'.format(logger.name, msg_lines[1]))
+        return 401
+    if 'Name:' not in msg_lines[2] or not msg_lines[2][5:].strip():
+        # Not correct NAME
+        logger.error('Incorrect REQUEST, bad NAME received from {}, received: {}.'.format(logger.name, msg_lines[2]))
+        return 402
+    if 'Size:' not in msg_lines[3] or not msg_lines[3][5:].strip():
+        # Not correct SIZE
+        logger.error('Incorrect REQUEST, bad SIZE received from {}, received: {}.'.format(logger.name, msg_lines[3]))
+        return 403
+    if 'EOF' not in msg_lines[4]:
+        # Not correct EOF
+        logger.error('Incorrect REQUEST, bad EOF received from {}, received: {}.'.format(logger.name, msg_lines[4]))
+        return 405
+    # Correct REQUEST
+    logger.info('Correct REQUEST received from {}.'.format(logger.name))
+    return 100
 
+
+async def parse_answer(msg_lines, logger):
+    logger.info('Trying to parse CORRECT ANSWER from {}.'.format(logger.name))
+    if 'From:' not in msg_lines[0] or not msg_lines[0][5:].strip():
+        # Not correct FROM
+        logger.error('Incorrect ANSWER, bad FROM received from {}, received: {}.'.format(logger.name, msg_lines[0]))
+        return 400
+    if 'To:' not in msg_lines[1] or not msg_lines[1][3:].strip():
+        # Not correct TO
+        logger.error('Incorrect ANSWER, bad TO received from {}, received: {}.'.format(logger.name, msg_lines[1]))
+        return 401
+    if 'Name:' not in msg_lines[2] or not msg_lines[2][5:].strip():
+        # Not correct NAME
+        logger.error('Incorrect ANSWER, bad NAME received from {}, received: {}.'.format(logger.name, msg_lines[2]))
+        return 402
+    if 'Data:' not in msg_lines[3] or not msg_lines[3][5:].strip():
+        # Not correct DATA
+        logger.error('Incorrect ANSWER, bad DATA received from {}, received: {}.'.format(logger.name, msg_lines[3]))
+        return 406
+    if 'Frag:' not in msg_lines[4] or not msg_lines[4][5:].strip():
+        # Not correct FRAG
+        logger.error('Incorrect ANSWER, bad FRAG received from {}, received: {}.'.format(logger.name, msg_lines[4]))
+        return 407
+    if 'Size:' not in msg_lines[5] or not msg_lines[5][5:].strip():
+        # Not correct SIZE
+        logger.error('Incorrect ANSWER, bad SIZE received from {}, received: {}.'.format(logger.name, msg_lines[5]))
+        return 403
+    if 'EOF' not in msg_lines[6]:
+        # Not correct EOF
+        logger.error('Incorrect ANSWER, bad EOF received from {}, received: {}.'.format(logger.name, msg_lines[6]))
+        return 405
+    # Correct CORRECT ANSWER received
+    logger.info('Correct CORRECT ANSWER received from {}.'.format(logger.name))
+    return 101
+
+
+async def parse_error(msg_lines, logger):
+    logger.info('Trying to parse ERROR ANSWER from {}.'.format(logger.name))
     print(msg_lines)
 
 

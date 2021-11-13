@@ -14,6 +14,7 @@ host = "0.0.0.0"
 port = 9080
 nodes = []
 edges = []
+connected_clients = []
 net = nx.Graph()
 routes_dict = {}
 clients_dict = {}
@@ -201,7 +202,7 @@ async def send_greeting(writer, logger):
         try:
             writer.write(wel_msg.encode())
             await writer.drain()
-            # logger.info('Message sent to {}: {}'.format(logger.name, wel_msg))
+            logger.info('WELCOME Message sent to {}.'.format(logger.name))
             return True
         except Exception as send_error:
             fails_counter += 1
@@ -260,6 +261,15 @@ async def serve_client_cb(client_reader, client_writer):
         outer_logger.error('Not found client IP tried to connect, ip: {}'.format(client_ip))
         return
 
+    if client_name in connected_clients:
+        all_tasks = asyncio.all_tasks()
+        for task in all_tasks:
+            if task.get_name() == client_name:
+                if not task.cancelled():
+                    task.cancel()
+        connected_clients.remove(client_name)
+
+    connected_clients.append(client_name)
     client_logger = setup_logger(client_name, '../Logs/routing_server_to_{}'.format(client_name))
     client_logger.info('Client connected: {}'.format(client_id))
 
@@ -267,11 +277,12 @@ async def serve_client_cb(client_reader, client_writer):
         net[me_node][client_logger.name]['weight'] = int(original_weight_dict.get(client_logger.name))
         await update_routing_file()
 
-    asyncio.ensure_future(client_task(client_reader, client_writer, client_logger))
+    asyncio.create_task(client_task(client_reader, client_writer, client_logger))
 
 
 async def client_task(reader, writer, logger):
     outer_logger.info('Successfully connected to client: {}'.format(logger.name))
+    asyncio.current_task().set_name(logger.name)
     fails_counter = 0
     fails_limit = int(u_interval / t_interval) + 1
 
@@ -280,6 +291,7 @@ async def client_task(reader, writer, logger):
             logger.error('Connection lost to client: {}, closing.'.format(logger.name))
             await update_non_responding_client(logger)
             writer.close()
+            connected_clients.remove(logger.name)
             return
 
         try:
@@ -305,6 +317,7 @@ async def client_task(reader, writer, logger):
                 logger.error('Disconnecting client: {}.'.format(logger.name))
                 await update_non_responding_client(logger)
                 writer.close()
+                connected_clients.remove(logger.name)
                 return
         elif code == 105:
             await update_routing()

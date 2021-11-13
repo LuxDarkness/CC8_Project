@@ -21,7 +21,7 @@ servers_file_route = '../Servers'
 lock = asyncio.Lock()
 t_interval = 10
 connection_retry_limit = 100
-wait_welcome_retry_limit = 10
+wait_welcome_retry_limit = 100
 try_to_say_hi_limit = 10
 failed_updates_limit = 10
 send_keep_alive_time = 20
@@ -235,12 +235,12 @@ async def communicate_with_server(reader, writer, logger):
             net_changes_msg = await format_changes_msg()
             # print(net_changes_msg)
             try:
-                print('-----------------------')
-                for edge in net.edges(data=True):
-                    print(edge)
-                print('------------------------')
-                print(net_changes_msg)
-                print('------------------------')
+                # print('-----------------------')
+                # for edge in net.edges(data=True):
+                #     print(edge)
+                # print('------------------------')
+                # print(net_changes_msg)
+                # print('------------------------')
                 writer.write(net_changes_msg.encode())
                 await writer.drain()
                 logger.info('DV update successfully sent to: {}.'.format(logger.name))
