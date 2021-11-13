@@ -265,6 +265,7 @@ async def serve_client_cb(client_reader, client_writer):
 
     if client_logger.name in original_weight_dict.keys():
         net[me_node][client_logger.name]['weight'] = int(original_weight_dict.get(client_logger.name))
+        await update_routing_file()
 
     asyncio.ensure_future(client_task(client_reader, client_writer, client_logger))
 

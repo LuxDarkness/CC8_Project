@@ -15,6 +15,8 @@ clients_file_route = '../Servers'
 init_route_file = '../Routing_Info'
 routing_file_route = '../Routing_Updates'
 
+max_message_wait_time = 30
+
 
 def get_clients():
     temp_dict = {}
@@ -61,6 +63,26 @@ def setup_logger(name, log_file, clean_file=False, level=logging.DEBUG):
     return logger
 
 
+async def parse_request(msg_lines, logger):
+
+    print(msg_lines)
+
+
+async def parse_msg(msg, logger):
+    msg = msg.decode()
+    msg_lines = msg.split('\n')
+    if len(msg_lines) == 5:
+        code = await parse_request(msg_lines, logger)
+    elif len(msg_lines) == 7:
+        code = await parse_answer(msg_lines, logger)
+    elif len(msg_lines) == 4:
+        code = await parse_error(msg_lines, logger)
+    else:
+        logger.error('Format for message from {} not found, message: {}.'.format(logger.name, msg))
+        code = 404
+    return code
+
+
 def serve_client_cb(client_reader, client_writer):
     client_id = client_writer.get_extra_info('peername')
     client_ip = client_id[0]
@@ -81,12 +103,23 @@ def serve_client_cb(client_reader, client_writer):
 
 
 async def client_task(reader, writer, logger):
-    client_addr = writer.get_extra_info('peername')
-    logger.info('Start echoing back to {}'.format(client_addr))
-    keep_waiting = True
-    while keep_waiting:
-        data = await reader.read(1024)
-        print(data)
+    outer_logger.info('Successfully connected to client: {}'.format(logger.name))
+    fails_counter = 0
+
+    while True:
+        try:
+            msg = asyncio.wait_for(reader.read(1024), timeout=max_message_wait_time)
+        except asyncio.TimeoutError:
+            fails_counter += 1
+            logger.warning('Timed out, no message received for {} seconds from {}.'.format(
+                fails_counter * max_message_wait_time, logger.name))
+            continue
+        except Exception as conn_error:
+            fails_counter += 1
+            logger.error('Connection with {} damaged, error: {}'.format(logger.name, conn_error))
+            continue
+
+        code = await parse_msg(msg, logger)
 
 
 if __name__ == '__main__':
