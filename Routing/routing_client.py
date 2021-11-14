@@ -1,4 +1,5 @@
 import os
+import sys
 import asyncio
 import time
 import networkx as nx
@@ -7,17 +8,18 @@ import re
 from socket import error as socket_error
 import errno
 from asyncinotify import Inotify, Mask
-from communication_standards import Routing_Client_Start
-from communication_standards import Routing_Client_Send_Update
-from communication_standards import Routing_Client_Keep_Alive
-from communication_standards import Routing_Route_Msg
+sys.path.append('/home/michael/PycharmProjects/CC8_Project/')
+from Model.communication_standards import Routing_Client_Start
+from Model.communication_standards import Routing_Client_Send_Update
+from Model.communication_standards import Routing_Client_Keep_Alive
+from Model.communication_standards import Routing_Route_Msg
 
-
+script_dir = os.path.dirname(__file__)
 formatter = logging.Formatter('%(asctime)s %(lineno)d %(levelname)s:%(message)s')
 
-init_route_file = '../Routing_Info'
-routing_file_route = '../Routing_Updates'
-servers_file_route = '../Servers'
+init_route_file = os.path.join(script_dir, '../Routing_Info')
+routing_file_route = os.path.join(script_dir, '../Routing_Updates')
+servers_file_route = os.path.join(script_dir, '../Servers')
 lock = asyncio.Lock()
 t_interval = 10
 connection_retry_limit = 100
@@ -29,12 +31,14 @@ to_update_neighbors = []
 
 
 def setup_logger(name, log_file, clean_file=True, level=logging.DEBUG):
-    if not os.path.exists(log_file):
-        os.mknod(log_file)
+    file_dir = os.path.join(script_dir, log_file)
+    file_dir = os.path.abspath(os.path.realpath(file_dir))
+    if not os.path.exists(file_dir):
+        os.mknod(file_dir)
     if clean_file:
-        open(log_file, 'w').close()
+        open(file_dir, 'w').close()
 
-    handler = logging.FileHandler(log_file)
+    handler = logging.FileHandler(file_dir)
     handler.setFormatter(formatter)
 
     console_handler = logging.StreamHandler()

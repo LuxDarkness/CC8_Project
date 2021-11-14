@@ -1,14 +1,18 @@
+import sys
 import asyncio
 import networkx as nx
 import logging
 import os
 import re
-from communication_standards import Routing_Server_Greeting
+sys.path.append('/home/michael/PycharmProjects/CC8_Project/')
+from Model.communication_standards import Routing_Server_Greeting
 
+script_dir = os.path.dirname(__file__)
 formatter = logging.Formatter('%(asctime)s %(lineno)d %(levelname)s:%(message)s')
 
-clients_file_route = '../Servers'
-routing_updates_route = '../Routing_Updates'
+clients_file_route = os.path.join(script_dir, '../Servers')
+routing_updates_route = os.path.join(script_dir, '../Routing_Updates')
+routing_info_route = os.path.join(script_dir, '../Routing_Info')
 lock = asyncio.Lock()
 host = "0.0.0.0"
 port = 9080
@@ -27,12 +31,14 @@ watcher_interval = 15
 
 
 def setup_logger(name, log_file, clean_file=True, level=logging.DEBUG):
-    if not os.path.exists(log_file):
-        os.mknod(log_file)
+    file_dir = os.path.join(script_dir, log_file)
+    file_dir = os.path.abspath(os.path.realpath(file_dir))
+    if not os.path.exists(file_dir):
+        os.mknod(file_dir)
     if clean_file:
-        open(log_file, 'w').close()
+        open(file_dir, 'w').close()
 
-    handler = logging.FileHandler(log_file)
+    handler = logging.FileHandler(file_dir)
     handler.setFormatter(formatter)
 
     console_handler = logging.StreamHandler()
@@ -124,7 +130,7 @@ def parse_line(line):
 
 def create_network():
     me_temp_node = None
-    with open('../Routing_Info', 'r', encoding='UTF-8') as file:
+    with open(routing_info_route, 'r', encoding='UTF-8') as file:
         while line := file.readline().strip():
             me, is_valid = parse_line(line)
             if is_valid:

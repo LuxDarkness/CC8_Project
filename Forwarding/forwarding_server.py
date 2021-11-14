@@ -1,24 +1,28 @@
 import asyncio
+import sys
 import logging
 import os
 import networkx as nx
 import time
-from forwarding_client import ForwardingClient
+from Client.forwarding_client import ForwardingClient
 from asyncinotify import Inotify, Mask
-from communication_standards import Error_Answer
+sys.path.append('/home/michael/PycharmProjects/CC8_Project/')
+from Model.communication_standards import Error_Answer
 
+script_dir = os.path.dirname(__file__)
 formatter = logging.Formatter('%(asctime)s %(lineno)d %(levelname)s:%(message)s')
+
 og_chunk_size = 1024
 host = "0.0.0.0"
 port = 1981
 clients_dict = {}
 receive_file = {}
 lock = asyncio.Lock()
-storage_route = './../Storage/'
-received_route = './../Received/'
-clients_file_route = '../Servers'
-init_route_file = '../Routing_Info'
-routing_file_route = '../Routing_Updates'
+storage_route = os.path.join(script_dir, './../Storage/')
+received_route = os.path.join(script_dir, './../Received/')
+clients_file_route = os.path.join(script_dir, '../Servers')
+init_route_file = os.path.join(script_dir, '../Routing_Info')
+routing_file_route = os.path.join(script_dir, '../Routing_Updates')
 
 correct_codes_list = [100, 101, 102]
 max_message_wait_time = 30
@@ -49,12 +53,14 @@ def get_first_net(logger):
 
 
 def setup_logger(name, log_file, clean_file=True, level=logging.DEBUG):
-    if not os.path.exists(log_file):
-        os.mknod(log_file)
+    file_dir = os.path.join(script_dir, log_file)
+    file_dir = os.path.abspath(os.path.realpath(file_dir))
+    if not os.path.exists(file_dir):
+        os.mknod(file_dir)
     if clean_file:
-        open(log_file, 'w').close()
+        open(file_dir, 'w').close()
 
-    handler = logging.FileHandler(log_file)
+    handler = logging.FileHandler(file_dir)
     handler.setFormatter(formatter)
 
     console_handler = logging.StreamHandler()
@@ -268,7 +274,7 @@ async def forward_message(msg, code, logger):
             frag = msg_lines[4][5:].strip()
             data = msg_lines[3][5:].strip()
             file_size = int(msg_lines[5][5:].strip())
-            data = bytes.fromhex(data).decode()
+            data = bytes.fromhex(data)
             logger.info('The length of the data received is: {}.'.format(len(data)))
             if filename not in receive_file.keys():
                 receive_file[filename] = {}
@@ -278,8 +284,9 @@ async def forward_message(msg, code, logger):
             total_received = 0
             for chunk in file_received_data.keys():
                 total_received += len(file_received_data.get(chunk))
-                if total_received == file_size:
+                if total_received >= file_size:
                     await create_file(file_received_data, filename)
+                    receive_file.get(filename).clear()
                     return True
         elif code == 102:
             logger.info('Received error message: \n{}.'.format(msg))
@@ -332,7 +339,7 @@ async def client_task(reader, logger):
     nulls_counter = 0
     while True:
         if nulls_limit == nulls_counter:
-            logger.info('Closing connection with client {}.'.format(logger.name))
+            logger.info('Closing loose connection with client {}.'.format(logger.name))
             break
         try:
             msg = await asyncio.wait_for(reader.read(), timeout=max_message_wait_time)

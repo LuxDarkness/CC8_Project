@@ -1,20 +1,25 @@
 import os
+import sys
 import asyncio
 import logging
 import aiofiles as aiof
 from contextlib import asynccontextmanager
-from communication_standards import Correct_Answer
+sys.path.append('/home/michael/PycharmProjects/CC8_Project/')
+from Model.communication_standards import Correct_Answer
 
+script_dir = os.path.dirname(__file__)
 formatter = logging.Formatter('%(asctime)s %(lineno)d %(levelname)s:%(message)s')
 
 
 def setup_logger(name, log_file, clean_file=True, level=logging.DEBUG):
-    if not os.path.exists(log_file):
-        os.mknod(log_file)
+    file_dir = os.path.join(script_dir, log_file)
+    file_dir = os.path.abspath(os.path.realpath(file_dir))
+    if not os.path.exists(file_dir):
+        os.mknod(file_dir)
     if clean_file:
-        open(log_file, 'w').close()
+        open(file_dir, 'w').close()
 
-    handler = logging.FileHandler(log_file)
+    handler = logging.FileHandler(file_dir)
     handler.setFormatter(formatter)
 
     console_handler = logging.StreamHandler()
@@ -72,8 +77,8 @@ class ForwardingClient:
         if self.make_chunks:
             message_lines = self.forward_message.split('\n')
             filename = message_lines[2][5:].strip()
-            user_to = message_lines[0][5:].strip()
-            user_from = message_lines[1][3:].strip()
+            user_from = message_lines[0][5:].strip()
+            user_to = message_lines[1][3:].strip()
             full_route = self.storage + filename
             size = os.path.getsize(full_route)
             async with aiof.open(full_route, mode='rb') as f:
