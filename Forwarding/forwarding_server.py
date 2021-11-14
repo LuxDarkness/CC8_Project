@@ -250,7 +250,6 @@ async def forward_message(msg, code, logger):
             full_route = storage_route + filename
             required_size = int(msg_lines[3][5:].strip())
             file_exists = os.path.isfile(full_route)
-            logger.info('The file exists is: {}.'.format(file_exists))
             real_size = 0
             if file_exists:
                 real_size = os.path.getsize(full_route)
@@ -270,6 +269,7 @@ async def forward_message(msg, code, logger):
             data = msg_lines[3][5:].strip()
             file_size = int(msg_lines[5][5:].strip())
             data = bytes.fromhex(data).decode()
+            logger.info('The length of the data received is: {}.'.format(len(data)))
             if filename not in receive_file.keys():
                 receive_file[filename] = {}
             receive_file.get(filename)[frag] = data
@@ -328,13 +328,18 @@ def serve_client_cb(client_reader, client_writer):
 async def client_task(reader, logger):
     outer_logger.info('Successfully connected to client: {}'.format(logger.name))
     fails_counter = 0
-
+    nulls_limit = 5
+    nulls_counter = 0
     while True:
+        if nulls_limit == nulls_counter:
+            logger.info('Closing connection with client {}.'.format(logger.name))
+            break
         try:
             msg = await asyncio.wait_for(reader.read(), timeout=max_message_wait_time)
             if not msg.strip():
                 logger.info('Received empty message from {}.'.format(logger.name))
                 await asyncio.sleep(3)
+                nulls_counter += 1
                 continue
         except asyncio.TimeoutError:
             fails_counter += 1

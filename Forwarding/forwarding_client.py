@@ -72,8 +72,8 @@ class ForwardingClient:
         if self.make_chunks:
             message_lines = self.forward_message.split('\n')
             filename = message_lines[2][5:].strip()
-            user_from = message_lines[0][5:].strip()
-            user_to = message_lines[1][3:].strip()
+            user_to = message_lines[0][5:].strip()
+            user_from = message_lines[1][3:].strip()
             full_route = self.storage + filename
             size = os.path.getsize(full_route)
             async with aiof.open(full_route, mode='rb') as f:
