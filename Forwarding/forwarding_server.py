@@ -14,8 +14,8 @@ port = 1981
 clients_dict = {}
 receive_file = {}
 lock = asyncio.Lock()
-storage_route = '../Storage/'
-received_route = '../Received/'
+storage_route = './../Storage/'
+received_route = './../Received/'
 clients_file_route = '../Servers'
 init_route_file = '../Routing_Info'
 routing_file_route = '../Routing_Updates'
@@ -175,11 +175,11 @@ async def parse_error(msg_lines, logger):
 async def parse_msg(msg, logger):
     msg = msg.decode()
     msg_lines = msg.split('\n')
-    if len(msg_lines) == 5:
+    if len(msg_lines) == 6:
         code = await parse_request(msg_lines, logger)
-    elif len(msg_lines) == 7:
+    elif len(msg_lines) == 8:
         code = await parse_answer(msg_lines, logger)
-    elif len(msg_lines) == 4:
+    elif len(msg_lines) == 5:
         code = await parse_error(msg_lines, logger)
     else:
         logger.error('Format for message from {} not found, message: {}.'.format(logger.name, msg))
@@ -237,31 +237,39 @@ async def forward_message(msg, code, logger):
     msg = msg.decode()
     msg_lines = msg.split('\n')
     send_to = msg_lines[1][3:].strip()
-    length, path = nx.single_source_bellman_ford(net, source=my_name, target=send_to, weight='weight')
+    original_send_to = msg_lines[1][3:].strip()
+    if my_name not in send_to:
+        length, path = nx.single_source_bellman_ford(net, source=my_name, target=send_to, weight='weight')
+    else:
+        send_to = msg_lines[0][5:].strip()
+        length, path = nx.single_source_bellman_ford(net, source=my_name, target=send_to, weight='weight')
     forward_to = path[1]
-    if my_name in send_to:
+    if my_name in original_send_to:
         if code == 100:
             filename = msg_lines[2][5:].strip()
             full_route = storage_route + filename
             required_size = int(msg_lines[3][5:].strip())
             file_exists = os.path.isfile(full_route)
-            real_size = os.path.getsize(full_route)
+            logger.info('The file exists is: {}.'.format(file_exists))
+            real_size = 0
+            if file_exists:
+                real_size = os.path.getsize(full_route)
             if file_exists and real_size == required_size:
-                client = ForwardingClient(msg, forward_to, clients_dict.get(forward_to), True)
+                client = ForwardingClient(msg, forward_to, clients_dict.get(forward_to), make_chunks=True)
                 await client.start_sending()
                 logger.info('Successfully answered request to: {}.'.format(forward_to))
             elif not file_exists:
                 # File doesn't exists
-                await forward_error(msg, 409, logger)
+                await forward_error(msg.encode(), 409, logger)
             elif not real_size == required_size:
                 # Size doesn't matches
-                await forward_error(msg, 410, logger)
+                await forward_error(msg.encode(), 410, logger)
         elif code == 101:
             filename = msg_lines[2][5:].strip()
             frag = msg_lines[4][5:].strip()
             data = msg_lines[3][5:].strip()
             file_size = int(msg_lines[5][5:].strip())
-            data = data.decode(encoding='ascii')
+            data = bytes.fromhex(data).decode()
             if filename not in receive_file.keys():
                 receive_file[filename] = {}
             receive_file.get(filename)[frag] = data
@@ -286,7 +294,10 @@ async def forward_error(msg, code, logger):
     msg = msg.decode()
     msg_lines = msg.split('\n')
     user_from = msg_lines[0][5:].strip()
-    length, path = nx.single_source_bellman_ford(net, source=my_name, target=user_from, weight='weight')
+    try:
+        length, path = nx.single_source_bellman_ford(net, source=my_name, target=user_from, weight='weight')
+    except nx.NetworkXNoPath:
+        length, path = nx.single_source_bellman_ford(net, source=my_name, target=logger.name, weight='weight')
     forward_to = path[1]
     error_message = await get_error_message(code)
     send_message = Error_Answer.format(my_name, user_from, error_message)
@@ -312,7 +323,6 @@ def serve_client_cb(client_reader, client_writer):
     client_logger.info('Client connected: {}'.format(client_id))
 
     asyncio.create_task(client_task(client_reader, client_logger))
-    client_writer.close()
 
 
 async def client_task(reader, logger):
@@ -321,7 +331,11 @@ async def client_task(reader, logger):
 
     while True:
         try:
-            msg = asyncio.wait_for(reader.read(1024), timeout=max_message_wait_time)
+            msg = await asyncio.wait_for(reader.read(), timeout=max_message_wait_time)
+            if not msg.strip():
+                logger.info('Received empty message from {}.'.format(logger.name))
+                await asyncio.sleep(3)
+                continue
         except asyncio.TimeoutError:
             fails_counter += 1
             logger.warning('Timed out, no message received for {} seconds from {}.'.format(
@@ -335,10 +349,12 @@ async def client_task(reader, logger):
         code = await parse_msg(msg, logger)
 
         if code in correct_codes_list:
+            # break_hundred = await forward_message(msg, code, logger)
             break_hundred = await asyncio.create_task(forward_message(msg, code, logger))
             if code != 100 or break_hundred:
                 break
         else:
+            # await forward_error(msg, code, logger)
             await asyncio.create_task(forward_error(msg, code, logger))
             break
 
@@ -356,8 +372,8 @@ if __name__ == '__main__':
                                        host=host,
                                        port=port,
                                        loop=loop)
-    loop.run_until_complete(watcher)
-    server = loop.run_until_complete(server_core)
+    coroutines = [watcher, server_core]
+    loop.run_until_complete(asyncio.wait(coroutines))
 
     try:
         outer_logger.info('Serving on {}:{}'.format(host, port))
@@ -365,6 +381,4 @@ if __name__ == '__main__':
     except KeyboardInterrupt as e:
         outer_logger.info('Keyboard interrupted. Exit.')
     # Close the server
-    server.close()
-    loop.run_until_complete(server.wait_closed())
     loop.close()

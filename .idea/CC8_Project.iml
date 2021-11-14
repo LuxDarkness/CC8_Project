@@ -4,8 +4,6 @@
     <content url="file://$MODULE_DIR$">
       <excludeFolder url="file://$MODULE_DIR$/venv" />
       <excludeFolder url="file://$MODULE_DIR$/Logs" />
-      <excludeFolder url="file://$MODULE_DIR$/Storage" />
-      <excludeFolder url="file://$MODULE_DIR$/Received" />
     </content>
     <orderEntry type="inheritedJdk" />
     <orderEntry type="sourceFolder" forTests="false" />

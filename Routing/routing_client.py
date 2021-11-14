@@ -268,8 +268,8 @@ async def communicate_with_server(reader, writer, logger):
             except socket_error as s_error:
                 if s_error.errno != errno.ECONNRESET:
                     logger.error('Server {} socket error: {}.'.format(logger.name, s_error))
-                    failed_update_messages += 1
-                    continue
+                    to_update_neighbors.append(logger.name)
+                    return
                 logger.error('Server {} disconnected, error: {}.'.format(logger.name, s_error))
                 to_update_neighbors.append(logger.name)
                 return

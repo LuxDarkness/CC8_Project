@@ -42,10 +42,7 @@ class ForwardingClient:
         self.storage = '../Storage/'
 
     async def start_sending(self):
-        loop = asyncio.get_event_loop()
-        send_message = self.send_message()
-        loop.run_until_complete(send_message)
-        loop.close()
+        await self.send_message()
 
     async def send_message(self):
         logger = setup_logger(self.to, '../Logs/forwarding_client_to_{}'.format(self.to))
@@ -67,14 +64,14 @@ class ForwardingClient:
                 logger.error('Could not connect to node: {}, err: {}, retrying.'.format(self.to, conn_error))
                 await asyncio.sleep(10)
                 continue
-            awaited_time = 0
             await self.communicate_with_server(writer, logger)
+            break
 
     async def communicate_with_server(self, writer, logger):
         logger.info('Message to process: \n{}.'.format(self.forward_message))
         if self.make_chunks:
             message_lines = self.forward_message.split('\n')
-            filename = message_lines[3][5:].strip()
+            filename = message_lines[2][5:].strip()
             user_from = message_lines[0][5:].strip()
             user_to = message_lines[1][3:].strip()
             full_route = self.storage + filename
@@ -83,12 +80,13 @@ class ForwardingClient:
                 pos = 1
                 async with self.file_chunks(f, self.chunk_size) as chunks:
                     async for chunk in chunks:
-                        ascii_chunk = chunk.encode(encoding='ascii')
-                        send_msg = Correct_Answer.format(user_from, user_to, filename, ascii_chunk, pos, size)
+                        use_chunk = chunk.hex()
+                        send_msg = Correct_Answer.format(user_from, user_to, filename, use_chunk, pos, size)
                         try:
                             writer.write(send_msg.encode())
                             await writer.drain()
                             logger.info('Chunk {} sent to {}.'.format(pos, logger.name))
+                            logger.info('Message sent to {}: {}'.format(logger.name, send_msg))
                             pos += 1
                         except Exception as e:
                             logger.error('Could not send message to {}, chunk {} received error: {}.'.format(
@@ -103,6 +101,7 @@ class ForwardingClient:
                     writer.write(self.forward_message.encode())
                     await writer.drain()
                     logger.info('Message successfully forwarded to {}.'.format(logger.name))
+                    break
                 except Exception as e:
                     logger.warning('Could not send message to {}, received error: {}.'.format(logger.name, e))
                     await asyncio.sleep(5)
