@@ -1,119 +1,121 @@
-# import tqdm
 import os
 import asyncio
+import logging
 import aiofiles as aiof
 from contextlib import asynccontextmanager
-from communication_standards import Request
+from communication_standards import Correct_Answer
 
-# def dv_test():
-#     path = nx.single_source_bellman_ford_path(net, me_node, weight="weight")
-#     length = nx.single_source_bellman_ford_path_length(net, me_node, weight="weight")
+formatter = logging.Formatter('%(asctime)s %(lineno)d %(levelname)s:%(message)s')
 
 
-@asynccontextmanager
-async def file_chunks(f, chunk_size):
-    try:
-        async def gen():
-            b = await f.read(chunk_size)
-            while b:
-                yield b
-                b = await f.read(chunk_size)
-        yield gen()
-    finally:
-        f.close()
+def setup_logger(name, log_file, clean_file=True, level=logging.DEBUG):
+    if not os.path.exists(log_file):
+        os.mknod(log_file)
+    if clean_file:
+        open(log_file, 'w').close()
 
-    async with aiof.open(filename, mode='rb') as f:
-        pos = 0
-        async with file_chunks(f, og_chunk_size) as chunks:
-            async for chunk in chunks:
-                writer.write(chunk.encode())
-                await writer.drain()
-                print(f"Writing to another one at position: {pos}")
-                pos += len(chunk)
+    handler = logging.FileHandler(log_file)
+    handler.setFormatter(formatter)
+
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+
+    logger = logging.getLogger(name)
+    if not logger.hasHandlers():
+        logger.setLevel(level)
+        logger.addHandler(handler)
+        logger.addHandler(console_handler)
+
+    return logger
 
 
 class ForwardingClient:
-    def __init__(self):
-        self.my_name = "Lux"
-        self.to = "Otro"
-        self.destiny_server = 'localhost'
+    def __init__(self, msg, to, server_ip, make_chunks=False, chunk_start=0):
+        self.time_wait_limit = 90
+        self.to = to
+        self.server_ip = server_ip
         self.port = 1981
+        self.chunk_size = 730
+        self.forward_message = msg
+        self.make_chunks = make_chunks
+        self.chunk_start = chunk_start
+        self.storage = '../Storage/'
 
-        self.base_filename = "imagen_prueba_1.jpg"
-        self.filename = "./Storage/" + self.base_filename
-        self.file_size = os.path.getsize(self.filename)
+    async def start_sending(self):
+        loop = asyncio.get_event_loop()
+        send_message = self.send_message()
+        loop.run_until_complete(send_message)
+        loop.close()
 
-        self.req_msg = Request.format(self.my_name, self.to, self.base_filename, self.file_size)
+    async def send_message(self):
+        logger = setup_logger(self.to, '../Logs/forwarding_client_to_{}'.format(self.to))
+        awaited_time = 0
+        while True:
+            if awaited_time >= self.time_wait_limit:
+                logger.error('Could not establish a connection with: {}'.format(self.to))
+                break
+            pre_connection = asyncio.open_connection(self.server_ip, self.port)
+            try:
+                reader, writer = await asyncio.wait_for(pre_connection, timeout=10)
+            except asyncio.TimeoutError:
+                awaited_time += 10
+                logger.info('Could not connect to node: {}, Timeout, retrying.'.format(self.to))
+                await asyncio.sleep(10)
+                continue
+            except Exception as conn_error:
+                awaited_time += 10
+                logger.error('Could not connect to node: {}, err: {}, retrying.'.format(self.to, conn_error))
+                await asyncio.sleep(10)
+                continue
+            awaited_time = 0
+            await self.communicate_with_server(writer, logger)
 
-    @staticmethod
-    async def check_wrong_answer(data):
-        msg_info = data.split("\n")
-        if not (msg_info[0].__contains__("From:")) and msg_info[0][5:].strip():
-            return False
-        if not (msg_info[1].__contains__("To:")) and msg_info[1][3:].strip():
-            return False
-        if not (msg_info[2].__contains__("Msg:")) and msg_info[2][4:].strip():
-            return False
-        if not (msg_info[3].__contains__("EOF")):
-            return False
-        return True, False
+    async def communicate_with_server(self, writer, logger):
+        logger.info('Message to process: \n{}.'.format(self.forward_message))
+        if self.make_chunks:
+            message_lines = self.forward_message.split('\n')
+            filename = message_lines[3][5:].strip()
+            user_from = message_lines[0][5:].strip()
+            user_to = message_lines[1][3:].strip()
+            full_route = self.storage + filename
+            size = os.path.getsize(full_route)
+            async with aiof.open(full_route, mode='rb') as f:
+                pos = 1
+                async with self.file_chunks(f, self.chunk_size) as chunks:
+                    async for chunk in chunks:
+                        ascii_chunk = chunk.encode(encoding='ascii')
+                        send_msg = Correct_Answer.format(user_from, user_to, filename, ascii_chunk, pos, size)
+                        try:
+                            writer.write(send_msg.encode())
+                            await writer.drain()
+                            logger.info('Chunk {} sent to {}.'.format(pos, logger.name))
+                            pos += 1
+                        except Exception as e:
+                            logger.error('Could not send message to {}, chunk {} received error: {}.'.format(
+                                logger.name, pos, e))
+        else:
+            awaited_time = 0
+            while True:
+                if awaited_time >= self.time_wait_limit:
+                    logger.error('Could not send message to {}, retry from start.'.format(logger.name))
+                    break
+                try:
+                    writer.write(self.forward_message.encode())
+                    await writer.drain()
+                    logger.info('Message successfully forwarded to {}.'.format(logger.name))
+                except Exception as e:
+                    logger.warning('Could not send message to {}, received error: {}.'.format(logger.name, e))
+                    await asyncio.sleep(5)
+                    awaited_time += 5
 
-    @staticmethod
-    async def check_correct_answer(data):
-        msg_info = data.split("\n")
-        if not (msg_info[0].__contains__("From:")) and msg_info[0][5:].strip():
-            return False
-        if not (msg_info[1].__contains__("To:")) and msg_info[1][3:].strip():
-            return False
-        if not (msg_info[2].__contains__("Name:")) and msg_info[2][5:].strip():
-            return False
-        if not (msg_info[3].__contains__("Data:")) and msg_info[3][5:].strip():
-            return False
-        if not (msg_info[4].__contains__("Frag:")) and msg_info[4][5:].strip():
-            return False
-        if not (msg_info[5].__contains__("Size:")) and msg_info[5][5:].strip():
-            return False
-        if not (msg_info[6].__contains__("EOF")):
-            return False
-        return True, True
-
-    async def check_format(self, data):
-        if data.split("\n").__len__() == 7:
-            return await self.check_correct_answer(data)
-        elif data.split("\n").__len__() == 4:
-            return await self.check_wrong_answer(data)
-        return False, False
-
-    @staticmethod
-    async def collect_data(data):
-        msg_info = data.split("\n")
-        print(msg_info[3][5:].strip())
-
-    async def receive_assemble(self, data):
-        msg_format_correct, correct_msg_received = await self.check_format(data)
-        if msg_format_correct and correct_msg_received:
-            await self.collect_data(data)
-        return True
-
-    async def tcp_echo_client(self):
-        reader, writer = await asyncio.open_connection(self.destiny_server, self.port)
-
-        print(f'Send: {self.req_msg!r}')
-        writer.write(self.req_msg.encode())
-        await writer.drain()
-
-        keep_waiting = True
-        while keep_waiting:
-            data = await reader.read(1024)
-            keep_waiting = await self.receive_assemble(data)
-        # print(f'Received: {data.decode()!r}')
-
-        print('Close the connection')
-        writer.close()
-        await writer.wait_closed()
-
-
-client = ForwardingClient()
-asyncio.run(client.tcp_echo_client())
-
-#  progress = tqdm.tqdm(range(file_size), f"Sending {filename}", unit="B", unit_scale=True, unit_divisor=BUFFER_SIZE)
+    @asynccontextmanager
+    async def file_chunks(self, f, chunk_size):
+        try:
+            async def gen():
+                b = await f.read(chunk_size)
+                while b:
+                    yield b
+                    b = await f.read(chunk_size)
+            yield gen()
+        finally:
+            f.close()

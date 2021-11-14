@@ -15,6 +15,7 @@ port = 9080
 nodes = []
 edges = []
 connected_clients = []
+not_connected_for = {}
 net = nx.Graph()
 routes_dict = {}
 clients_dict = {}
@@ -22,10 +23,10 @@ original_weight_dict = {}
 me_node = None
 t_interval = 30
 u_interval = 90
-send_greeting_errors_limit = 10
+watcher_interval = 15
 
 
-def setup_logger(name, log_file, clean_file=False, level=logging.DEBUG):
+def setup_logger(name, log_file, clean_file=True, level=logging.DEBUG):
     if not os.path.exists(log_file):
         os.mknod(log_file)
     if clean_file:
@@ -77,6 +78,14 @@ async def update_routing():
             net_updated = True
     if net_updated:
         await update_routing_file()
+        await draw_graph_update()
+
+
+async def draw_graph_update():
+    print('----------------Graph-----------------')
+    for u, v, w in net.edges(data=True):
+        print(u, v, w)
+    print('----------------Graph-----------------')
 
 
 async def update_routing_file():
@@ -85,6 +94,18 @@ async def update_routing_file():
             file.truncate(0)
             nx.write_gpickle(net, routing_updates_route)
             file.close()
+
+
+async def connected_watcher():
+    while True:
+        await asyncio.sleep(watcher_interval)
+        for act_client in not_connected_for.keys():
+            not_connected_for[act_client] = not_connected_for[act_client] + watcher_interval
+            not_connected_time = not_connected_for.get(act_client)
+            if not_connected_time >= u_interval:
+                logger = setup_logger(act_client, '../Logs/routing_server_to_{}'.format(act_client))
+                logger.info('Client {} did not connect in the last {} seconds.'.format(logger.name, not_connected_time))
+                await update_non_responding_client(logger)
 
 
 def parse_line(line):
@@ -115,11 +136,11 @@ def create_network():
 
 
 async def parse_start(lines):
-    if not("From:" in lines[0]) or not(lines[0][5:].strip()):
+    if "From:" not in lines[0] or not lines[0][5:].strip():
         # Bad formatted hello msg
         return 400
     msg_from = lines[0][5:].strip()
-    if not(msg_from in nodes):
+    if msg_from not in nodes:
         # Who are you?
         return 405
     # HELLO msg correctly processed
@@ -127,11 +148,11 @@ async def parse_start(lines):
 
 
 async def parse_ka(lines):
-    if not("From:" in lines[0]) or not(lines[0][5:].strip()):
+    if "From:" not in lines[0] or not lines[0][5:].strip():
         # Bad formatted keep alive msg
         return 410
     msg_from = lines[0][5:].strip()
-    if not(msg_from in nodes):
+    if msg_from not in nodes:
         # Who are you?
         return 405
     # KeepAlive msg correctly processed
@@ -147,18 +168,18 @@ async def parse_double(lines):
     return 430
 
 
-async def parse_dv_info(lines):
-    if not("From:" in lines[0]) or not(lines[0][5:].strip()):
+async def parse_dv_info(lines, msg, logger):
+    if "From:" not in lines[0] or not lines[0][5:].strip():
         # Not correct DV request
         return 415
-    if not("Type:DV" in lines[1]):
+    if "Type:DV" not in lines[1]:
         # Not correct DV request
         return 415
-    if not("Len:" in lines[2]) or not(lines[2][4:].strip()):
+    if "Len:" not in lines[2] or not lines[2][4:].strip():
         # Not correct DV request
         return 415
     msg_from = lines[0][5:].strip()
-    if not (msg_from in nodes):
+    if msg_from not in nodes:
         # Who are you?
         return 405
     lines_len = int(lines[2][4:].strip())
@@ -176,12 +197,13 @@ async def parse_dv_info(lines):
             routes_dict.get(msg_from).clear()
             return 420
     # DV msg correctly processed
+    logger.info('From {} received DV: \n{}'.format(logger.name, msg))
     return 105
 
 
-async def parse_request(msg):
-    msg_lines = msg.decode()
-    msg_lines = re.sub(r'\n+', '\n', msg_lines).strip()
+async def parse_request(msg, logger):
+    msg = msg.decode()
+    msg_lines = re.sub(r'\n+', '\n', msg).strip()
     if msg_lines == '':
         # Lost connection
         return 425
@@ -189,12 +211,14 @@ async def parse_request(msg):
     if len(msg_lines) == 2:
         return await parse_double(msg_lines)
     else:
-        return await parse_dv_info(msg_lines)
+        return await parse_dv_info(msg_lines, msg, logger)
 
 
 async def send_greeting(writer, logger):
     fails_counter = 0
+    retry_time = 5
     wel_msg = Routing_Server_Greeting.format(me_node)
+    send_greeting_errors_limit = int(u_interval/retry_time)
     while True:
         if fails_counter == send_greeting_errors_limit:
             logger.error('Could not send greeting to: {}, disconnecting.'.format(logger.name))
@@ -208,6 +232,7 @@ async def send_greeting(writer, logger):
             fails_counter += 1
             logger.warning(
                 'Could not send greeting to: {}, times: {}, error: {}'.format(logger.name, fails_counter, send_error))
+            await asyncio.sleep(retry_time)
 
 
 async def wrong_format_message(code, msg, logger):
@@ -230,7 +255,7 @@ async def wrong_format_message(code, msg, logger):
         first_error = 'DV information not correctly formatted'
     else:
         first_error = 'Unknown message format'
-    logger.warning('Message received: {}, with first error: {}.'.format(msg, first_error))
+    logger.warning('Message received: {}, from {} with first error: {}.'.format(msg, logger.name, first_error))
     return finish
 
 
@@ -239,13 +264,15 @@ async def update_non_responding_client(logger):
         og_weight = net.get_edge_data(me_node, logger.name).get('weight')
         original_weight_dict[logger.name] = og_weight
     try:
-        this_edge = [(me_node, logger.name, 99)]
-        net.remove_node(logger.name)
-        net.add_weighted_edges_from(this_edge)
-        await update_routing_file()
-        logger.info('{} did not respond, updating weight to 99'.format(logger.name))
+        if net.get_edge_data(me_node, logger.name).get('weight') < 99:
+            this_edge = [(me_node, logger.name, 99)]
+            net.remove_node(logger.name)
+            net.add_weighted_edges_from(this_edge)
+            await update_routing_file()
+            await draw_graph_update()
+            logger.info('{} did not respond, updating weight to 99'.format(logger.name))
     except KeyError:
-        pass
+        logger.error('Tried to remove non existent node: {}.'.format(logger.name))
 
 
 async def serve_client_cb(client_reader, client_writer):
@@ -261,6 +288,8 @@ async def serve_client_cb(client_reader, client_writer):
         outer_logger.error('Not found client IP tried to connect, ip: {}'.format(client_ip))
         return
 
+    not_connected_for[client_name] = 0
+
     if client_name in connected_clients:
         all_tasks = asyncio.all_tasks()
         for task in all_tasks:
@@ -274,8 +303,10 @@ async def serve_client_cb(client_reader, client_writer):
     client_logger.info('Client connected: {}'.format(client_id))
 
     if client_logger.name in original_weight_dict.keys():
-        net[me_node][client_logger.name]['weight'] = int(original_weight_dict.get(client_logger.name))
-        await update_routing_file()
+        if net[me_node][client_logger.name]['weight'] == 99:
+            net[me_node][client_logger.name]['weight'] = int(original_weight_dict.get(client_logger.name))
+            await update_routing_file()
+            await draw_graph_update()
 
     asyncio.create_task(client_task(client_reader, client_writer, client_logger))
 
@@ -283,11 +314,10 @@ async def serve_client_cb(client_reader, client_writer):
 async def client_task(reader, writer, logger):
     outer_logger.info('Successfully connected to client: {}'.format(logger.name))
     asyncio.current_task().set_name(logger.name)
-    fails_counter = 0
-    fails_limit = int(u_interval / t_interval) + 1
+    waited_time = 0
 
     while True:
-        if fails_counter == fails_limit:
+        if waited_time >= u_interval:
             logger.error('Connection lost to client: {}, closing.'.format(logger.name))
             await update_non_responding_client(logger)
             writer.close()
@@ -296,21 +326,23 @@ async def client_task(reader, writer, logger):
 
         try:
             msg = await asyncio.wait_for(reader.read(1024), timeout=t_interval)
-            fails_counter = 0
         except asyncio.TimeoutError:
-            fails_counter += 1
+            waited_time += t_interval
             logger.warning('Timed out, no message received for {} seconds from {}.'.format(
-                fails_counter * t_interval, logger.name))
+                waited_time, logger.name))
             continue
         except Exception as conn_error:
-            fails_counter += 1
             logger.error('Connection with {} damaged, error: {}'.format(logger.name, conn_error))
+            await asyncio.sleep(5)
+            waited_time += 5
             continue
 
         # logger.info('Received: {}'.format(msg.decode()))
-        code = await parse_request(msg)
+        code = await parse_request(msg, logger)
 
         if code == 100:
+            waited_time = 0
+            not_connected_for[logger.name] = 0
             logger.info('Correctly received HELLO message from {}.'.format(logger.name))
             msg_sent = await send_greeting(writer, logger)
             if not msg_sent:
@@ -320,15 +352,20 @@ async def client_task(reader, writer, logger):
                 connected_clients.remove(logger.name)
                 return
         elif code == 105:
+            not_connected_for[logger.name] = 0
+            waited_time = 0
             await update_routing()
             logger.info('Correctly updated DV information from {} in server.'.format(logger.name))
         elif code == 110:
+            not_connected_for[logger.name] = 0
+            waited_time = 0
             logger.info('Correctly received keep alive message from {}.'.format(logger.name))
         else:
             finish_conn = await wrong_format_message(code, msg, logger)
             if finish_conn:
+                not_connected_for[logger.name] = 0
                 await asyncio.sleep(10)
-                fails_counter += 1
+                waited_time += 10
 
 
 if __name__ == '__main__':
@@ -336,19 +373,19 @@ if __name__ == '__main__':
     clean_updates()
     me_node = create_network()
     clients_dict = get_clients()
+    for client in clients_dict.keys():
+        not_connected_for[client] = 0
     loop = asyncio.get_event_loop()
+    check_not_connected = connected_watcher()
     server_core = asyncio.start_server(serve_client_cb,
                                        host=host,
                                        port=port,
                                        loop=loop)
-    server = loop.run_until_complete(server_core)
+    coroutines = [check_not_connected, server_core]
+    loop.run_until_complete(asyncio.wait(coroutines))
 
     try:
-        outer_logger.info('Serving on {}:{}'.format(host, port))
         loop.run_forever()
     except KeyboardInterrupt as e:
         outer_logger.info('Keyboard interrupted. Exit.')
-    # Close the server
-    server.close()
-    loop.run_until_complete(server.wait_closed())
     loop.close()

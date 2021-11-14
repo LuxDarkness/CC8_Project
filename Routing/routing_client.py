@@ -25,10 +25,10 @@ wait_welcome_retry_limit = 100
 try_to_say_hi_limit = 10
 failed_updates_limit = 10
 send_keep_alive_time = 20
-neighbors_updated = []
+to_update_neighbors = []
 
 
-def setup_logger(name, log_file, clean_file=False, level=logging.DEBUG):
+def setup_logger(name, log_file, clean_file=True, level=logging.DEBUG):
     if not os.path.exists(log_file):
         os.mknod(log_file)
     if clean_file:
@@ -68,10 +68,12 @@ async def get_net(logger):
     async with lock:
         empty_graph = os.stat(routing_file_route).st_size == 0
         while empty_graph:
-            time.sleep(1)
+            await asyncio.sleep(1)
             empty_graph = os.stat(routing_file_route).st_size == 0
         logger.info('DV graph modified, update!')
-        neighbors_updated.clear()
+        for s in servers_dict.keys():
+            if s not in to_update_neighbors:
+                to_update_neighbors.append(s)
         return nx.read_gpickle(routing_file_route)
 
 
@@ -88,7 +90,7 @@ async def watch_net(logger):
     global net
     while True:
         with Inotify() as inotify:
-            inotify.add_watch(routing_file_route, Mask.CLOSE_WRITE)  # type: ignore
+            inotify.add_watch(routing_file_route, Mask.MODIFY)
             async for _ in inotify:
                 net = await get_net(logger)
 
@@ -136,13 +138,14 @@ async def log_msg_error(msg, code, logger):
     logger.error('{} is not a valid WELCOME message, first error detected: {}.'.format(msg, first_error))
 
 
-async def format_changes_msg():
+async def format_changes_msg(logger):
     lengths = nx.single_source_bellman_ford_path_length(net, my_name, weight='weight')
     base_msg = Routing_Client_Send_Update.format(my_name, len(lengths) - 1)
     for server in lengths.keys():
         if not (my_name in server):
             base_msg += Routing_Route_Msg.format(server, lengths.get(server))
             base_msg += '\n'
+    logger.info('DV message to {}:\n{}.'.format(logger.name, base_msg))
     return base_msg
 
 
@@ -162,10 +165,12 @@ async def connect_and_communicate():
         except asyncio.TimeoutError:
             failed_conn_counter += 1
             connection_logger.info('Could not connect to node: {}, Timeout, retrying.'.format(server))
+            await asyncio.sleep(10)
             continue
         except Exception as conn_error:
             failed_conn_counter += 1
             connection_logger.error('Could not connect to node: {}, err: {}, retrying.'.format(server, conn_error))
+            await asyncio.sleep(10)
             continue
         failed_conn_counter = 0
         await communicate_with_server(reader, writer, server_logger)
@@ -231,30 +236,20 @@ async def communicate_with_server(reader, writer, logger):
         if failed_update_messages == failed_updates_limit:
             logger.error('Could not send any update or ka messages to: {}.'.format(logger.name))
             return
-        if logger.name not in neighbors_updated:
-            net_changes_msg = await format_changes_msg()
-            # print(net_changes_msg)
+        if logger.name in to_update_neighbors:
+            net_changes_msg = await format_changes_msg(logger)
             try:
-                # print('-----------------------')
-                # for edge in net.edges(data=True):
-                #     print(edge)
-                # print('------------------------')
-                # print(net_changes_msg)
-                # print('------------------------')
                 writer.write(net_changes_msg.encode())
                 await writer.drain()
                 logger.info('DV update successfully sent to: {}.'.format(logger.name))
-                neighbors_updated.append(logger.name)
+                to_update_neighbors.remove(logger.name)
                 last_sent_msg_counter = 0
                 failed_update_messages = 0
             except socket_error as s_error:
                 if s_error.errno != errno.ECONNRESET:
                     logger.error('Server {} socket error: {}.'.format(logger.name, s_error))
-                    failed_update_messages += 1
-                    continue
+                    return
                 logger.error('Server {} disconnected, error: {}.'.format(logger.name, s_error))
-                if logger.name in neighbors_updated:
-                    neighbors_updated.remove(logger.name)
                 return
             except Exception as update_except:
                 logger.warning('Could not send dv update message to: {}, error: {}.'.format(logger.name, update_except))
@@ -276,7 +271,7 @@ async def communicate_with_server(reader, writer, logger):
                     failed_update_messages += 1
                     continue
                 logger.error('Server {} disconnected, error: {}.'.format(logger.name, s_error))
-                neighbors_updated.remove(logger.name)
+                to_update_neighbors.append(logger.name)
                 return
             except Exception as keep_except:
                 logger.warning('Could not send keep alive message to: {}, error: {}.'.format(logger.name, keep_except))

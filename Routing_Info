@@ -1,5 +1,5 @@
 Me: C
 Nodes: A,B
 Costs:
-C,A,5
-C,B,1
+A,C,5
+B,C,1

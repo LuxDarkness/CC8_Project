@@ -3,7 +3,8 @@ import logging
 import os
 import networkx as nx
 import time
-from communication_standards import Correct_Answer
+from forwarding_client import ForwardingClient
+from asyncinotify import Inotify, Mask
 from communication_standards import Error_Answer
 
 formatter = logging.Formatter('%(asctime)s %(lineno)d %(levelname)s:%(message)s')
@@ -11,10 +12,15 @@ og_chunk_size = 1024
 host = "0.0.0.0"
 port = 1981
 clients_dict = {}
+receive_file = {}
+lock = asyncio.Lock()
+storage_route = '../Storage/'
+received_route = '../Received/'
 clients_file_route = '../Servers'
 init_route_file = '../Routing_Info'
 routing_file_route = '../Routing_Updates'
 
+correct_codes_list = [100, 101, 102]
 max_message_wait_time = 30
 
 
@@ -42,7 +48,7 @@ def get_first_net(logger):
     return nx.read_gpickle(routing_file_route)
 
 
-def setup_logger(name, log_file, clean_file=False, level=logging.DEBUG):
+def setup_logger(name, log_file, clean_file=True, level=logging.DEBUG):
     if not os.path.exists(log_file):
         os.mknod(log_file)
     if clean_file:
@@ -61,6 +67,25 @@ def setup_logger(name, log_file, clean_file=False, level=logging.DEBUG):
         logger.addHandler(console_handler)
 
     return logger
+
+
+async def get_net(logger):
+    async with lock:
+        empty_graph = os.stat(routing_file_route).st_size == 0
+        while empty_graph:
+            time.sleep(1)
+            empty_graph = os.stat(routing_file_route).st_size == 0
+        logger.info('DV graph modified, update!')
+        return nx.read_gpickle(routing_file_route)
+
+
+async def watch_net(logger):
+    global net
+    while True:
+        with Inotify() as inotify:
+            inotify.add_watch(routing_file_route, Mask.CLOSE_WRITE)
+            async for _ in inotify:
+                net = await get_net(logger)
 
 
 async def parse_request(msg_lines, logger):
@@ -127,7 +152,24 @@ async def parse_answer(msg_lines, logger):
 
 async def parse_error(msg_lines, logger):
     logger.info('Trying to parse ERROR ANSWER from {}.'.format(logger.name))
-    print(msg_lines)
+    if 'From:' not in msg_lines[0] or not msg_lines[0][5:].strip():
+        # Not correct FROM
+        logger.error('Incorrect ERROR, bad FROM received from {}, received: {}.'.format(logger.name, msg_lines[0]))
+        return 400
+    if 'To:' not in msg_lines[1] or not msg_lines[1][3:].strip():
+        # Not correct TO
+        logger.error('Incorrect ERROR, bad TO received from {}, received: {}.'.format(logger.name, msg_lines[1]))
+        return 401
+    if 'Msg:' not in msg_lines[2] or not msg_lines[2][4:].strip():
+        # Not correct MSG
+        logger.error('Incorrect ERROR, bad MSG received from {}, received: {}.'.format(logger.name, msg_lines[2]))
+        return 408
+    if 'EOF' not in msg_lines[3]:
+        # Not correct EOF
+        logger.error('Incorrect ERROR, bad EOF received from {}, received: {}.'.format(logger.name, msg_lines[3]))
+        return 405
+    logger.info('Correct CORRECT ERROR received from {}.'.format(logger.name))
+    return 102
 
 
 async def parse_msg(msg, logger):
@@ -143,6 +185,114 @@ async def parse_msg(msg, logger):
         logger.error('Format for message from {} not found, message: {}.'.format(logger.name, msg))
         code = 404
     return code
+
+
+async def get_error_message(code):
+    if code == 400:
+        return 'Bad FROM received, who are you supposed to be?'
+    elif code == 401:
+        return 'Bad TO received, who are we sending it to?'
+    elif code == 402:
+        return 'Incorrect NAME received, is this even a file?'
+    elif code == 403:
+        return 'Incorrect SIZE received, is this a number or something else?'
+    elif code == 404:
+        return 'I do not even know what kind of format this is supposed to be!'
+    elif code == 405:
+        return 'Wrong EOF line, how do you mess this up?'
+    elif code == 406:
+        return 'Incorrect DATA received, how am I supposed to receive it?'
+    elif code == 407:
+        return 'Bad FRAG received, not very good at counting are we.'
+    elif code == 408:
+        return 'Bad ERROR received, did you forget even this?'
+    elif code == 409:
+        return 'I do not have this file, did you mean to ask someone else?'
+    elif code == 410:
+        return 'I have the file, it is just of another size, maybe try again?'
+
+
+async def create_file(file_received_data, filename):
+    full_route = received_route + filename
+    if not os.path.exists(full_route):
+        os.mknod(full_route)
+    actual_frag = 1
+    last_frag = 0
+    keep_writing = True
+    for frag in file_received_data.keys():
+        if int(frag) > last_frag:
+            last_frag = int(frag)
+    with open(full_route, 'w') as file:
+        while keep_writing:
+            for frag in file_received_data.keys():
+                if int(frag) == actual_frag:
+                    file.write(file_received_data.get(frag))
+                    actual_frag += 1
+                if actual_frag > last_frag:
+                    keep_writing = False
+        file.close()
+
+
+async def forward_message(msg, code, logger):
+    msg = msg.decode()
+    msg_lines = msg.split('\n')
+    send_to = msg_lines[1][3:].strip()
+    length, path = nx.single_source_bellman_ford(net, source=my_name, target=send_to, weight='weight')
+    forward_to = path[1]
+    if my_name in send_to:
+        if code == 100:
+            filename = msg_lines[2][5:].strip()
+            full_route = storage_route + filename
+            required_size = int(msg_lines[3][5:].strip())
+            file_exists = os.path.isfile(full_route)
+            real_size = os.path.getsize(full_route)
+            if file_exists and real_size == required_size:
+                client = ForwardingClient(msg, forward_to, clients_dict.get(forward_to), True)
+                await client.start_sending()
+                logger.info('Successfully answered request to: {}.'.format(forward_to))
+            elif not file_exists:
+                # File doesn't exists
+                await forward_error(msg, 409, logger)
+            elif not real_size == required_size:
+                # Size doesn't matches
+                await forward_error(msg, 410, logger)
+        elif code == 101:
+            filename = msg_lines[2][5:].strip()
+            frag = msg_lines[4][5:].strip()
+            data = msg_lines[3][5:].strip()
+            file_size = int(msg_lines[5][5:].strip())
+            data = data.decode(encoding='ascii')
+            if filename not in receive_file.keys():
+                receive_file[filename] = {}
+            receive_file.get(filename)[frag] = data
+            logger.info('Correctly received {} data frag {}, from {}.'.format(filename, frag, logger.name))
+            file_received_data = receive_file.get(filename)
+            total_received = 0
+            for chunk in file_received_data.keys():
+                total_received += len(file_received_data.get(chunk))
+                if total_received == file_size:
+                    await create_file(file_received_data, filename)
+                    return True
+        elif code == 102:
+            logger.info('Received error message: \n{}.'.format(msg))
+    else:
+        client = ForwardingClient(msg, forward_to, clients_dict.get(forward_to))
+        await client.start_sending()
+        logger.info('Successfully forwarded message to: {}, message: \n{}.'.format(forward_to, msg))
+    return False
+
+
+async def forward_error(msg, code, logger):
+    msg = msg.decode()
+    msg_lines = msg.split('\n')
+    user_from = msg_lines[0][5:].strip()
+    length, path = nx.single_source_bellman_ford(net, source=my_name, target=user_from, weight='weight')
+    forward_to = path[1]
+    error_message = await get_error_message(code)
+    send_message = Error_Answer.format(my_name, user_from, error_message)
+    client = ForwardingClient(send_message, forward_to, clients_dict.get(forward_to))
+    await client.start_sending()
+    logger.info('Successfully forwarded error message to: {}, message: \n{}.'.format(forward_to, msg))
 
 
 def serve_client_cb(client_reader, client_writer):
@@ -161,10 +311,11 @@ def serve_client_cb(client_reader, client_writer):
     client_logger = setup_logger(client_name, '../Logs/routing_server_to_{}'.format(client_name))
     client_logger.info('Client connected: {}'.format(client_id))
 
-    asyncio.ensure_future(client_task(client_reader, client_writer, client_logger))
+    asyncio.create_task(client_task(client_reader, client_logger))
+    client_writer.close()
 
 
-async def client_task(reader, writer, logger):
+async def client_task(reader, logger):
     outer_logger.info('Successfully connected to client: {}'.format(logger.name))
     fails_counter = 0
 
@@ -183,17 +334,29 @@ async def client_task(reader, writer, logger):
 
         code = await parse_msg(msg, logger)
 
+        if code in correct_codes_list:
+            break_hundred = await asyncio.create_task(forward_message(msg, code, logger))
+            if code != 100 or break_hundred:
+                break
+        else:
+            await asyncio.create_task(forward_error(msg, code, logger))
+            break
+
 
 if __name__ == '__main__':
     outer_logger = setup_logger('outer_logger', '../Logs/forwarding_server_outer')
     my_name = get_name()
     net = get_first_net(outer_logger)
     clients_dict = get_clients()
+
+    watcher = watch_net(outer_logger)
+
     loop = asyncio.get_event_loop()
     server_core = asyncio.start_server(serve_client_cb,
                                        host=host,
                                        port=port,
                                        loop=loop)
+    loop.run_until_complete(watcher)
     server = loop.run_until_complete(server_core)
 
     try:
