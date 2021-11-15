@@ -1,5 +1,5 @@
-Me: A
-Nodes: B,C
+Me: NUFIO
+Nodes: ERINSON,DARWIN
 Costs:
-A,B,99
-A,C,5
+DARWIN,NUFIO,11
+ERINSON,NUFIO,3

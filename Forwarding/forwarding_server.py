@@ -182,6 +182,7 @@ async def parse_error(msg_lines, logger):
 async def parse_msg(msg, logger):
     msg = msg.decode()
     msg = re.sub(r'\n+', '\n', msg).strip()
+    print(msg)
     msg_lines = msg.split('\n')
     if len(msg_lines) == 5:
         code = await parse_request(msg_lines, logger)

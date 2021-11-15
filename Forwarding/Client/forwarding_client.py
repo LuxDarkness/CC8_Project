@@ -41,7 +41,7 @@ class ForwardingClient:
         self.server_ip = server_ip
         self.port = 1981
         self.chunk_size = 730
-        self.forward_message = msg
+        self.forward_message = msg + '\n'
         self.make_chunks = make_chunks
         self.chunk_start = chunk_start
         self.storage = os.path.join(script_dir, '../../Storage/')
