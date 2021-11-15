@@ -222,25 +222,26 @@ async def get_error_message(code):
 
 
 async def create_file(file_received_data, filename):
-    full_route = received_route + filename
-    if not os.path.exists(full_route):
-        os.mknod(full_route)
-    actual_frag = 1
-    last_frag = 0
-    keep_writing = True
-    for frag in file_received_data.keys():
-        if int(frag) > last_frag:
-            last_frag = int(frag)
-    with open(full_route, 'wb') as file:
-        while keep_writing:
-            for frag in file_received_data.keys():
-                if int(frag) == actual_frag:
-                    str_frag = file_received_data.get(frag)
-                    file.write(str_frag)
-                    actual_frag += 1
-                if actual_frag > last_frag:
-                    keep_writing = False
-        file.close()
+    async with lock:
+        full_route = received_route + filename
+        if not os.path.exists(full_route):
+            os.mknod(full_route)
+        actual_frag = 1
+        last_frag = 0
+        keep_writing = True
+        for frag in file_received_data.keys():
+            if int(frag) > last_frag:
+                last_frag = int(frag)
+        with open(full_route, 'wb') as file:
+            while keep_writing:
+                for frag in file_received_data.keys():
+                    if int(frag) == actual_frag:
+                        str_frag = file_received_data.get(frag)
+                        file.write(str_frag)
+                        actual_frag += 1
+                    if actual_frag > last_frag:
+                        keep_writing = False
+            file.close()
 
 
 async def forward_message(msg, code, logger):
