@@ -214,6 +214,9 @@ async def parse_request(msg, logger):
         # Lost connection
         return 425
     msg_lines = msg_lines.split("\n")
+    if len(msg_lines) == 1:
+        # Single line message received
+        return 435
     if len(msg_lines) == 2:
         return await parse_double(msg_lines)
     else:
@@ -259,6 +262,8 @@ async def wrong_format_message(code, msg, logger):
         first_error = 'Expected DV format message'
     elif code == 420:
         first_error = 'DV information not correctly formatted'
+    elif code == 435:
+        first_error = 'Single line message received, this is not correct'
     else:
         first_error = 'Unknown message format'
     logger.warning('Message received: {}, from {} with first error: {}.'.format(msg, logger.name, first_error))

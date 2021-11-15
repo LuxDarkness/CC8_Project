@@ -44,13 +44,13 @@ class ForwardingClient:
         self.forward_message = msg
         self.make_chunks = make_chunks
         self.chunk_start = chunk_start
-        self.storage = '../Storage/'
+        self.storage = os.path.join(script_dir, '../../Storage/')
 
     async def start_sending(self):
         await self.send_message()
 
     async def send_message(self):
-        logger = setup_logger(self.to, '../Logs/forwarding_client_to_{}'.format(self.to))
+        logger = setup_logger(self.to, '../../Logs/forwarding_client_to_{}'.format(self.to))
         awaited_time = 0
         while True:
             if awaited_time >= self.time_wait_limit:
@@ -77,8 +77,8 @@ class ForwardingClient:
         if self.make_chunks:
             message_lines = self.forward_message.split('\n')
             filename = message_lines[2][5:].strip()
-            user_from = message_lines[0][5:].strip()
-            user_to = message_lines[1][3:].strip()
+            user_to = message_lines[0][5:].strip()
+            user_from = message_lines[1][3:].strip()
             full_route = self.storage + filename
             size = os.path.getsize(full_route)
             async with aiof.open(full_route, mode='rb') as f:

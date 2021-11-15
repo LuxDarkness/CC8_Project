@@ -2,6 +2,7 @@ import asyncio
 import sys
 import logging
 import os
+import re
 import networkx as nx
 import time
 from Client.forwarding_client import ForwardingClient
@@ -180,12 +181,13 @@ async def parse_error(msg_lines, logger):
 
 async def parse_msg(msg, logger):
     msg = msg.decode()
+    msg = re.sub(r'\n+', '\n', msg).strip()
     msg_lines = msg.split('\n')
-    if len(msg_lines) == 6:
+    if len(msg_lines) == 5:
         code = await parse_request(msg_lines, logger)
-    elif len(msg_lines) == 8:
+    elif len(msg_lines) == 7:
         code = await parse_answer(msg_lines, logger)
-    elif len(msg_lines) == 5:
+    elif len(msg_lines) == 4:
         code = await parse_error(msg_lines, logger)
     else:
         logger.error('Format for message from {} not found, message: {}.'.format(logger.name, msg))
@@ -228,11 +230,12 @@ async def create_file(file_received_data, filename):
     for frag in file_received_data.keys():
         if int(frag) > last_frag:
             last_frag = int(frag)
-    with open(full_route, 'w') as file:
+    with open(full_route, 'wb') as file:
         while keep_writing:
             for frag in file_received_data.keys():
                 if int(frag) == actual_frag:
-                    file.write(file_received_data.get(frag))
+                    str_frag = file_received_data.get(frag)
+                    file.write(str_frag)
                     actual_frag += 1
                 if actual_frag > last_frag:
                     keep_writing = False
@@ -241,6 +244,8 @@ async def create_file(file_received_data, filename):
 
 async def forward_message(msg, code, logger):
     msg = msg.decode()
+    msg = re.sub(r'\n+', '\n', msg).strip()
+    print(msg)
     msg_lines = msg.split('\n')
     send_to = msg_lines[1][3:].strip()
     original_send_to = msg_lines[1][3:].strip()
@@ -287,18 +292,23 @@ async def forward_message(msg, code, logger):
                 if total_received >= file_size:
                     await create_file(file_received_data, filename)
                     receive_file.get(filename).clear()
+                    logger.info('Successfully created file received from {}.'.format(logger.name))
                     return True
+            return False
         elif code == 102:
             logger.info('Received error message: \n{}.'.format(msg))
+            return True
     else:
         client = ForwardingClient(msg, forward_to, clients_dict.get(forward_to))
         await client.start_sending()
         logger.info('Successfully forwarded message to: {}, message: \n{}.'.format(forward_to, msg))
+        return True
     return False
 
 
 async def forward_error(msg, code, logger):
     msg = msg.decode()
+    msg = re.sub(r'\n+', '\n', msg).strip()
     msg_lines = msg.split('\n')
     user_from = msg_lines[0][5:].strip()
     try:
@@ -323,8 +333,11 @@ def serve_client_cb(client_reader, client_writer):
             client_name = temp_client_name
 
     if not client_name:
-        outer_logger.error('Not found client IP tried to connect, ip: {}'.format(client_ip))
-        return
+        if client_ip == '127.0.0.1':
+            client_name = my_name
+        else:
+            outer_logger.error('Not found client IP tried to connect, ip: {}'.format(client_ip))
+            return
 
     client_logger = setup_logger(client_name, '../Logs/routing_server_to_{}'.format(client_name))
     client_logger.info('Client connected: {}'.format(client_id))
@@ -338,11 +351,11 @@ async def client_task(reader, logger):
     nulls_limit = 5
     nulls_counter = 0
     while True:
-        if nulls_limit == nulls_counter:
+        if nulls_limit == nulls_counter or fails_counter == 10:
             logger.info('Closing loose connection with client {}.'.format(logger.name))
             break
         try:
-            msg = await asyncio.wait_for(reader.read(), timeout=max_message_wait_time)
+            msg = await asyncio.wait_for(reader.readuntil(separator=b'EOF'), timeout=max_message_wait_time)
             if not msg.strip():
                 logger.info('Received empty message from {}.'.format(logger.name))
                 await asyncio.sleep(3)
@@ -358,12 +371,13 @@ async def client_task(reader, logger):
             logger.error('Connection with {} damaged, error: {}'.format(logger.name, conn_error))
             continue
 
+        fails_counter = 0
         code = await parse_msg(msg, logger)
 
         if code in correct_codes_list:
             # break_hundred = await forward_message(msg, code, logger)
             break_hundred = await asyncio.create_task(forward_message(msg, code, logger))
-            if code != 100 or break_hundred:
+            if code == 100 or break_hundred:
                 break
         else:
             # await forward_error(msg, code, logger)

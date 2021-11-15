@@ -111,6 +111,9 @@ async def parse_welcome_msg(msg):
         # Connection lost
         return 420
     msg_lines = msg.split('\n')
+    if len(msg_lines) == 1:
+        # Single line message
+        return 404
     if len(msg_lines) > 2:
         # Unknown format
         return 415
@@ -137,6 +140,8 @@ async def log_msg_error(msg, code, logger):
         first_error = 'Sender not in neighbors list'
     elif code == 420:
         first_error = 'Connection lost'
+    elif code == 404:
+        first_error = 'Single line message received'
     else:
         first_error = 'Unknown format error'
     logger.error('{} is not a valid WELCOME message, first error detected: {}.'.format(msg, first_error))
